@@ -1,145 +1,214 @@
+// todo.tsx
 import { useState, useEffect } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, Alert, Pressable, Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { LinearGradient } from 'expo-linear-gradient';
+import { View, Text, TextInput, FlatList, StyleSheet, Alert, Pressable, ActivityIndicator } from 'react-native';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCAPmxbbQYb__P8gQmwAzKMKpCSCn6Wg64",
+  authDomain: "week6-2f2db.firebaseapp.com",
+  projectId: "week6-2f2db",
+  storageBucket: "week6-2f2db.appspot.com",
+  messagingSenderId: "1079717584950",
+  appId: "1:1079717584950:web:4aa65692fabd7fc0403897",
+  measurementId: "G-FG9XYBPDEB"
+};
+
+// Initialize Firebase with error handling
+let app: ReturnType<typeof initializeApp> | undefined;
+let db: ReturnType<typeof getFirestore> | undefined;
+
+try {
+  app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+} catch (error) {
+  console.error('Firebase initialization error:', error);
+}
 
 interface Todo {
+  id: string;
   task: string;
-  deadline: string;
+  completed: boolean;
+  createdAt: Date;
 }
 
 export default function TodoScreen() {
   const [task, setTask] = useState('');
-  const [deadlineDate, setDeadlineDate] = useState<Date>(new Date());
-  const [deadlineTime, setDeadlineTime] = useState<Date>(new Date());
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  // Load todos from Firestore
   useEffect(() => {
-    loadTodos();
-  }, []);
-
-  const loadTodos = async () => {
-    try {
-      const savedTodos = await AsyncStorage.getItem('todos');
-      if (savedTodos) setTodos(JSON.parse(savedTodos));
-    } catch (error) {
-      console.error('Error loading todos:', error);
+    // Check if Firebase is properly initialized
+    if (!db) {
+      setError('Firebase not initialized properly');
+      setLoading(false);
+      return;
     }
-  };
+
+    const unsubscribe = onSnapshot(
+      collection(db, 'todos'),
+      (snapshot) => {
+        try {
+          const todoList: Todo[] = [];
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            todoList.push({
+              id: doc.id,
+              task: data.task,
+              completed: data.completed || false,
+              createdAt: data.createdAt && data.createdAt.toDate ? data.createdAt.toDate() : new Date()
+            });
+          });
+          // Sort by creation date (newest first)
+          todoList.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+          setTodos(todoList);
+          setLoading(false);
+          setError(null);
+        } catch (err) {
+          console.error('Error processing todos:', err);
+          setError('Error loading todos');
+          setLoading(false);
+        }
+      },
+      (err) => {
+        console.error('Firestore listener error:', err);
+        setError('Failed to connect to database');
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
 
   const addTodo = async () => {
     if (!task.trim()) {
-      Alert.alert('Error', 'Please enter a task.');
+      Alert.alert('Error', 'Please enter a task');
       return;
     }
+
+    if (!db) {
+      Alert.alert('Error', 'Database not available');
+      return;
+    }
+
     try {
-      const formattedDateTime = `${deadlineDate.toISOString().split('T')[0]} ${deadlineTime.toTimeString().slice(0, 5)}`;
-      const newTodo = { task, deadline: formattedDateTime };
-      const updatedTodos = [...todos, newTodo];
-      await AsyncStorage.setItem('todos', JSON.stringify(updatedTodos));
-      setTodos(updatedTodos);
+      await addDoc(collection(db, 'todos'), {
+        task: task.trim(),
+        completed: false,
+        createdAt: Timestamp.now()
+      });
       setTask('');
-      setDeadlineDate(new Date());
-      setDeadlineTime(new Date());
     } catch (error) {
-      console.error('Error saving todo:', error);
+      console.error('Error adding todo:', error);
+      Alert.alert('Error', 'Failed to add todo');
     }
   };
 
-  const deleteTodo = async (index: number) => {
-    const updatedTodos = todos.filter((_, i) => i !== index);
-    await AsyncStorage.setItem('todos', JSON.stringify(updatedTodos));
-    setTodos(updatedTodos);
+  const deleteTodo = async (id: string) => {
+    if (!db) {
+      Alert.alert('Error', 'Database not available');
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'todos', id));
+    } catch (error) {
+      console.error('Error deleting todo:', error);
+      Alert.alert('Error', 'Failed to delete todo');
+    }
   };
 
-  const onDateChange = (event: any, selectedDate?: Date) => {
-    const currentDate = selectedDate || deadlineDate;
-    setShowDatePicker(Platform.OS === 'ios');
-    setDeadlineDate(currentDate);
+  const toggleComplete = async (id: string, currentStatus: boolean) => {
+    if (!db) {
+      Alert.alert('Error', 'Database not available');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'todos', id), {
+        completed: !currentStatus
+      });
+    } catch (error) {
+      console.error('Error updating todo:', error);
+      Alert.alert('Error', 'Failed to update todo');
+    }
   };
 
-  const onTimeChange = (event: any, selectedTime?: Date) => {
-    const currentTime = selectedTime || deadlineTime;
-    setShowTimePicker(Platform.OS === 'ios');
-    setDeadlineTime(currentTime);
-  };
+  if (error) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Todo List</Text>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Error: {error}</Text>
+          <Pressable 
+            style={styles.retryButton} 
+            onPress={() => {
+              setError(null);
+              setLoading(true);
+              // Trigger re-render to retry Firebase connection
+            }}
+          >
+            <Text style={styles.buttonText}>Retry</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>To-Do List</Text>
-      <LinearGradient
-        colors={['#e6e6fa', '#f5f5f5']}
-        style={styles.inputContainer}
-      >
+      <Text style={styles.title}>Todo List</Text>
+      
+      <View style={styles.inputContainer}>
         <TextInput
           style={styles.input}
-          placeholder="Add a task..."
-          placeholderTextColor="#888"
+          placeholder="Add a new task..."
           value={task}
           onChangeText={setTask}
+          onSubmitEditing={addTodo}
         />
-      </LinearGradient>
-      <Pressable onPress={() => setShowDatePicker(true)}>
-        <LinearGradient
-          colors={['#6200ea', '#8a4af3']}
-          style={styles.button}
-        >
-          <Text style={styles.buttonText}>Select Date: {deadlineDate.toISOString().split('T')[0]}</Text>
-        </LinearGradient>
-      </Pressable>
-      {showDatePicker && (
-        <DateTimePicker
-          value={deadlineDate}
-          mode="date"
-          display="default"
-          onChange={onDateChange}
-        />
-      )}
-      <Pressable onPress={() => setShowTimePicker(true)}>
-        <LinearGradient
-          colors={['#6200ea', '#8a4af3']}
-          style={styles.button}
-        >
-          <Text style={styles.buttonText}>Select Time: {deadlineTime.toTimeString().slice(0, 5)}</Text>
-        </LinearGradient>
-      </Pressable>
-      {showTimePicker && (
-        <DateTimePicker
-          value={deadlineTime}
-          mode="time"
-          display="default"
-          onChange={onTimeChange}
-        />
-      )}
-      <Pressable onPress={addTodo}>
-        <LinearGradient
-          colors={['#6200ea', '#8a4af3']}
-          style={styles.button}
-        >
-          <Text style={styles.buttonText}>Add Task</Text>
-        </LinearGradient>
-      </Pressable>
-      <FlatList
-        data={todos}
-        renderItem={({ item, index }) => (
-          <View style={styles.todoItem}>
-            <Text style={styles.todoText}>{`${item.task} (Due: ${item.deadline})`}</Text>
-            <Pressable onPress={() => deleteTodo(index)}>
-              <LinearGradient
-                colors={['#b00020', '#e63946']}
+        <Pressable onPress={addTodo} style={styles.addButton}>
+          <Text style={styles.buttonText}>Add</Text>
+        </Pressable>
+      </View>
+
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#6200ea" />
+          <Text style={styles.loadingText}>Loading todos...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={todos}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <View style={[styles.todoItem, item.completed && styles.completedTodo]}>
+              <Pressable 
+                onPress={() => toggleComplete(item.id, item.completed)}
+                style={styles.todoTextContainer}
+              >
+                <Text style={[styles.todoText, item.completed && styles.completedText]}>
+                  {item.task}
+                </Text>
+                <Text style={styles.todoDate}>
+                  {item.createdAt.toLocaleDateString()}
+                </Text>
+              </Pressable>
+              <Pressable 
+                onPress={() => deleteTodo(item.id)}
                 style={styles.deleteButton}
               >
-                <Text style={styles.deleteButtonText}>Delete</Text>
-              </LinearGradient>
-            </Pressable>
-          </View>
-        )}
-        keyExtractor={(_, index) => index.toString()}
-        style={styles.list}
-      />
+                <Text style={styles.deleteText}>Delete</Text>
+              </Pressable>
+            </View>
+          )}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>No todos yet. Add one above!</Text>
+          }
+        />
+      )}
     </View>
   );
 }
@@ -148,88 +217,102 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    borderRadius: 15,
-    margin: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 8,
+    backgroundColor: '#f5f5f5',
   },
   title: {
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: 24,
+    fontWeight: 'bold',
     marginBottom: 20,
-    color: '#1e1e1e',
     textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.1)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
   },
   inputContainer: {
-    borderRadius: 10,
-    marginBottom: 15,
-    padding: 2,
+    flexDirection: 'row',
+    marginBottom: 20,
   },
   input: {
-    borderWidth: 0,
-    borderRadius: 8,
-    padding: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    color: '#1e1e1e',
-    fontSize: 16,
-    textAlignVertical: 'top',
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
+    backgroundColor: '#fff',
   },
-  button: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 25,
-    alignItems: 'center',
-    marginBottom: 10,
-    shadowColor: '#6200ea',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 5,
-    elevation: 5,
+  addButton: {
+    backgroundColor: '#6200ea',
+    padding: 10,
+    borderRadius: 5,
+    marginLeft: 10,
+    justifyContent: 'center',
   },
   buttonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  list: {
-    flex: 1,
+    fontWeight: 'bold',
   },
   todoItem: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: 'rgba(245, 245, 245, 0.9)',
-    borderRadius: 10,
+    backgroundColor: '#fff',
     padding: 15,
+    borderRadius: 5,
     marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  completedTodo: {
+    opacity: 0.6,
+    backgroundColor: '#f0f0f0',
+  },
+  todoTextContainer: {
+    flex: 1,
   },
   todoText: {
     fontSize: 16,
-    flex: 1,
-    color: '#1e1e1e',
-    lineHeight: 22,
+  },
+  completedText: {
+    textDecorationLine: 'line-through',
+    color: '#666',
+  },
+  todoDate: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 5,
   },
   deleteButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 15,
-    borderRadius: 20,
+    backgroundColor: '#ff4444',
+    padding: 8,
+    borderRadius: 5,
+  },
+  deleteText: {
+    color: '#fff',
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginTop: 20,
+    color: '#666',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  deleteButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '500',
+  loadingText: {
+    marginTop: 10,
+    color: '#666',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    color: '#ff4444',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: '#6200ea',
+    padding: 10,
+    borderRadius: 5,
   },
 });
