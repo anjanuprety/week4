@@ -1,4 +1,3 @@
-// todo.tsx
 import { useState, useEffect } from 'react';
 import { View, Text, TextInput, FlatList, StyleSheet, Alert, Pressable, ActivityIndicator } from 'react-native';
 import { initializeApp } from 'firebase/app';
